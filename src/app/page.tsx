@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, JSX } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 
 // TypeScript Interfaces
 interface AdventText {
@@ -29,11 +29,11 @@ export default function MarkdownEditor(): JSX.Element {
   const [saving, setSaving] = useState<boolean>(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
 
-  // API Hilfsfunktionen
-  const supabaseRequest = async <T = any,>(
+  // API Hilfsfunktionen - kein any mehr!
+  const supabaseRequest = async <T = Record<string, unknown>,>(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     endpoint: string,
-    body: any = null,
+    body: Record<string, unknown> | null = null,
     extraHeaders: Record<string, string> = {}
   ): Promise<T> => {
     const config: RequestInit = {
@@ -68,23 +68,8 @@ export default function MarkdownEditor(): JSX.Element {
     }
   };
 
-  // Lade alle gespeicherten Texte beim Start
-  useEffect(() => {
-    loadAllTexts();
-  }, []);
-
-  // Lade aktuellen Text wenn sich die Auswahl ändert
-  useEffect(() => {
-    if (texts[currentText]) {
-      setContent(texts[currentText].content || "");
-      setTitle(texts[currentText].title || `Text ${currentText}`);
-    } else {
-      setContent("");
-      setTitle(`Text ${currentText}`);
-    }
-  }, [currentText, texts]);
-
-  const loadAllTexts = async (): Promise<void> => {
+  // loadAllTexts mit useCallback für useEffect dependency
+  const loadAllTexts = useCallback(async (): Promise<void> => {
     try {
       const data = await supabaseRequest<AdventText[]>(
         "GET",
@@ -100,7 +85,23 @@ export default function MarkdownEditor(): JSX.Element {
       console.error("Fehler beim Laden:", error);
       alert("Fehler beim Laden der Texte");
     }
-  };
+  }, []);
+
+  // useEffect mit korrekter dependency
+  useEffect(() => {
+    loadAllTexts();
+  }, [loadAllTexts]);
+
+  // Lade aktuellen Text wenn sich die Auswahl ändert
+  useEffect(() => {
+    if (texts[currentText]) {
+      setContent(texts[currentText].content || "");
+      setTitle(texts[currentText].title || `Text ${currentText}`);
+    } else {
+      setContent("");
+      setTitle(`Text ${currentText}`);
+    }
+  }, [currentText, texts]);
 
   const saveText = async (): Promise<void> => {
     if (!content.trim() && !title.trim()) return;
@@ -115,13 +116,14 @@ export default function MarkdownEditor(): JSX.Element {
       };
 
       // Versuche zuerst zu updaten, falls das fehlschlägt, dann einfügen
+      // updateError Variable entfernt!
       try {
         await supabaseRequest(
           "PATCH",
           `/adventcalendar?text_number=eq.${currentText}`,
           textData
         );
-      } catch (updateError) {
+      } catch {
         // Falls Update fehlschlägt, versuche Insert
         await supabaseRequest("POST", "/adventcalendar", textData);
       }
