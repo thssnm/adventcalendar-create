@@ -29,7 +29,7 @@ export default function MarkdownEditor(): JSX.Element {
   const [saving, setSaving] = useState<boolean>(false);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
 
-  // API Hilfsfunktionen - kein any mehr!
+  // API Hilfsfunktionen
   const supabaseRequest = async <T = Record<string, unknown>,>(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     endpoint: string,
@@ -42,6 +42,7 @@ export default function MarkdownEditor(): JSX.Element {
         "Content-Type": "application/json",
         apikey: SUPABASE_KEY,
         Authorization: `Bearer ${SUPABASE_KEY}`,
+        Prefer: "return=representation",
         ...extraHeaders,
       },
     };
@@ -50,42 +51,129 @@ export default function MarkdownEditor(): JSX.Element {
       config.body = JSON.stringify(body);
     }
 
+    console.log(`🚀 ${method} Request:`, endpoint);
+    console.log("📦 Body:", body);
+
     try {
       const response = await fetch(
         `${SUPABASE_URL}/rest/v1${endpoint}`,
         config
       );
+
+      console.log(`📊 Response Status:`, response.status);
+
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorText = await response.text();
+        console.error("❌ Response Error:", errorText);
+        throw new Error(
+          `HTTP error! status: ${response.status}, message: ${errorText}`
+        );
       }
 
-      // Prüfe ob Antwort leer ist (bei POST/PUT/DELETE ohne Return)
       const text = await response.text();
+      console.log("📄 Response Text:", text);
+
       return text ? JSON.parse(text) : ({} as T);
     } catch (error) {
-      console.error("Supabase request error:", error);
+      console.error("💥 Supabase request error:", error);
       throw error;
     }
   };
 
-  // loadAllTexts mit useCallback für useEffect dependency
+  // loadAllTexts mit useCallback
   const loadAllTexts = useCallback(async (): Promise<void> => {
     try {
+      console.log("🔄 Lade alle Texte...");
       const data = await supabaseRequest<AdventText[]>(
         "GET",
         "/adventcalendar?select=*&order=text_number"
       );
+
+      console.log("📥 Geladene Daten:", data);
 
       const textsObj: TextsState = {};
       data.forEach((text: AdventText) => {
         textsObj[text.text_number] = text;
       });
       setTexts(textsObj);
+
+      console.log(
+        "✅ Texte erfolgreich geladen:",
+        Object.keys(textsObj).length,
+        "Texte"
+      );
     } catch (error) {
-      console.error("Fehler beim Laden:", error);
+      console.error("❌ Fehler beim Laden:", error);
       alert("Fehler beim Laden der Texte");
     }
   }, []);
+
+  // NEUE SAVE FUNKTION - Vereinfacht
+  const saveText = async (): Promise<void> => {
+    if (!content.trim() && !title.trim()) {
+      console.log("⚠️ Kein Inhalt zum Speichern");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const textData = {
+        text_number: currentText,
+        title: title,
+        content: content,
+        updated_at: new Date().toISOString(),
+      };
+
+      console.log("💾 === SPEICHERE TEXT ===");
+      console.log("📝 Text Daten:", textData);
+
+      // Direkter INSERT Versuch (da Tabelle leer ist)
+      console.log("🆕 Versuche INSERT...");
+      const result = await supabaseRequest("POST", "/adventcalendar", textData);
+
+      console.log("✅ INSERT Erfolgreich! Result:", result);
+
+      // Nach erfolgreichem Speichern: Daten neu laden
+      await loadAllTexts();
+
+      setLastSaved(new Date().toLocaleTimeString());
+      console.log("🎉 Speichervorgang komplett!");
+    } catch (error) {
+      console.error("💥 Fehler beim Speichern:", error);
+
+      // Falls INSERT fehlschlägt (z.B. wegen Unique Constraint), versuche UPDATE
+      try {
+        console.log("🔄 INSERT fehlgeschlagen, versuche UPDATE...");
+        const textData = {
+          title: title,
+          content: content,
+          updated_at: new Date().toISOString(),
+        };
+
+        const updateResult = await supabaseRequest(
+          "PATCH",
+          `/adventcalendar?text_number=eq.${currentText}`,
+          textData
+        );
+        console.log("✅ UPDATE Erfolgreich! Result:", updateResult);
+
+        await loadAllTexts();
+        setLastSaved(new Date().toLocaleTimeString());
+      } catch (updateError) {
+        console.error("💥 Auch UPDATE fehlgeschlagen:", updateError);
+        alert(
+          `Fehler beim Speichern: ${
+            updateError instanceof Error
+              ? updateError.message
+              : "Unbekannter Fehler"
+          }`
+        );
+      }
+    }
+
+    setSaving(false);
+  };
 
   // useEffect mit korrekter dependency
   useEffect(() => {
@@ -102,45 +190,6 @@ export default function MarkdownEditor(): JSX.Element {
       setTitle(`Text ${currentText}`);
     }
   }, [currentText, texts]);
-
-  const saveText = async (): Promise<void> => {
-    if (!content.trim() && !title.trim()) return;
-
-    setSaving(true);
-    try {
-      const textData: Omit<AdventText, "id" | "created_at"> = {
-        text_number: currentText,
-        title: title,
-        content: content,
-        updated_at: new Date().toISOString(),
-      };
-
-      // Versuche zuerst zu updaten, falls das fehlschlägt, dann einfügen
-      // updateError Variable entfernt!
-      try {
-        await supabaseRequest(
-          "PATCH",
-          `/adventcalendar?text_number=eq.${currentText}`,
-          textData
-        );
-      } catch {
-        // Falls Update fehlschlägt, versuche Insert
-        await supabaseRequest("POST", "/adventcalendar", textData);
-      }
-
-      // Update local state
-      setTexts((prev) => ({
-        ...prev,
-        [currentText]: textData as AdventText,
-      }));
-
-      setLastSaved(new Date().toLocaleTimeString());
-    } catch (error) {
-      console.error("Fehler beim Speichern:", error);
-      alert("Fehler beim Speichern");
-    }
-    setSaving(false);
-  };
 
   const deleteText = async (): Promise<void> => {
     if (!window.confirm(`Möchtest du Text ${currentText} wirklich löschen?`))
@@ -183,7 +232,6 @@ export default function MarkdownEditor(): JSX.Element {
   };
 
   const exportAllAsZip = async (): Promise<void> => {
-    // Einfache Lösung: Alle als einzelne Downloads
     Object.values(texts).forEach((text: AdventText, index: number) => {
       setTimeout(() => {
         const markdownContent: string = `# ${text.title}\n\n${text.content}`;
@@ -265,17 +313,7 @@ export default function MarkdownEditor(): JSX.Element {
                 onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
                   setContent(e.target.value)
                 }
-                placeholder="Hier deinen Markdown-Text eingeben...
-
-Beispiele:
-# Überschrift
-## Unterüberschrift
-**Fett** oder *kursiv*
-- Liste
-- Punkt 2
-
-[Link](http://example.com)
-"
+                placeholder="Hier deinen Markdown-Text eingeben..."
                 className="w-full h-96 p-3 border border-gray-300 rounded-lg font-mono text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-black"
               />
             </div>
