@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, JSX } from "react";
 
 // TypeScript Interfaces
 interface AdventText {
